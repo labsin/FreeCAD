@@ -736,7 +736,7 @@ endif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
     endif(BUILD_GUI)
 
     if(BUILD_ENABLE_QT5)
-        find_package(Qt5Transitional REQUIRED Widgets QUIET)
+        find_package(Qt5Transitional REQUIRED Widgets Xml OpenGL UiTools PrintSupport Network Svg QUIET)
     else(BUILD_ENABLE_QT5)
         find_package(Qt4)
         IF(NOT QT4_FOUND)
@@ -1079,4 +1079,3 @@ if (${CMAKE_BUILD_TOOL} MATCHES "make")
             "Now run 'make' to build ${PACKAGE_NAME}\n"
             "=======================================\n")
 endif()
-
