@@ -196,6 +196,7 @@ OPTION(BUILD_START "Build the FreeCAD start module" ON)
 OPTION(BUILD_TEST "Build the FreeCAD test module" ON)
 OPTION(BUILD_WEB "Build the FreeCAD web module" ON)
 OPTION(BUILD_VR "Build the FreeCAD Oculus Rift support (need Oculus SDK 4.x or higher)" OFF)
+OPTION(BUILD_ENABLE_QT5 "Try to build with qt5" OFF)
 
 if(MSVC)
     OPTION(BUILD_FEM_NETGEN "Build the FreeCAD FEM module with the NETGEN mesher" ON)
@@ -349,6 +350,43 @@ endif(BUILD_JTREADER)
 if(BUILD_START)
   set(BUILD_WEB ON)
 endif(BUILD_START)
+
+if(BUILD_ENABLE_QT5)
+    set(BUILD_FEM OFF CACHE BOOL "" FORCE)
+    set(BUILD_FEM_VTK OFF CACHE BOOL "" FORCE)
+    set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
+    set(BUILD_TEMPLATE OFF CACHE BOOL "" FORCE)
+    set(BUILD_ARCH OFF CACHE BOOL "" FORCE)
+    set(BUILD_ASSEMBLY OFF CACHE BOOL "" FORCE)
+    set(BUILD_COMPLETE OFF CACHE BOOL "" FORCE)
+    set(BUILD_DRAFT OFF CACHE BOOL "" FORCE)
+    set(BUILD_DRAWING OFF CACHE BOOL "" FORCE)
+    set(BUILD_IDF OFF CACHE BOOL "" FORCE)
+    set(BUILD_IMAGE OFF CACHE BOOL "" FORCE)
+    set(BUILD_IMPORT OFF CACHE BOOL "" FORCE)
+    set(BUILD_INSPECTION OFF CACHE BOOL "" FORCE)
+    set(BUILD_JTREADER OFF CACHE BOOL "" FORCE)
+    set(BUILD_MATERIAL OFF CACHE BOOL "" FORCE)
+    set(BUILD_MESH OFF CACHE BOOL "" FORCE)
+    set(BUILD_MESH_PART OFF CACHE BOOL "" FORCE)
+    set(BUILD_OPENSCAD OFF CACHE BOOL "" FORCE)
+    set(BUILD_PART OFF CACHE BOOL "" FORCE)
+    set(BUILD_PART_DESIGN OFF CACHE BOOL "" FORCE)
+    set(BUILD_PATH OFF CACHE BOOL "" FORCE)
+    set(BUILD_PLOT OFF CACHE BOOL "" FORCE)
+    set(BUILD_POINTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_RAYTRACING OFF CACHE BOOL "" FORCE)
+    set(BUILD_REVERSEENGINEERING OFF CACHE BOOL "" FORCE)
+    set(BUILD_ROBOT OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHIP OFF CACHE BOOL "" FORCE)
+    set(BUILD_SKETCHER OFF CACHE BOOL "" FORCE)
+    set(BUILD_SPREADSHEET OFF CACHE BOOL "" FORCE)
+    set(BUILD_START OFF CACHE BOOL "" FORCE)
+    set(BUILD_TEST OFF CACHE BOOL "" FORCE)
+    set(BUILD_WEB OFF CACHE BOOL "" FORCE)
+    set(BUILD_VR OFF CACHE BOOL "" FORCE)
+endif(BUILD_ENABLE_QT5)
+
 
 #leaving test module for someone else.
 #image has none. as far as I can tell.
@@ -697,15 +735,19 @@ endif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
         set(QT_USE_QTWEBKIT TRUE)
     endif(BUILD_GUI)
 
-    find_package(Qt4)# REQUIRED
+    if(BUILD_ENABLE_QT5)
+        find_package(Qt5Transitional REQUIRED Widgets QUIET)
+    else(BUILD_ENABLE_QT5)
+        find_package(Qt4)
+        IF(NOT QT4_FOUND)
+            MESSAGE(FATAL_ERROR "=======================\n"
+                                "Qt libraries not found.\n"
+                                "=======================\n")
+        ENDIF(NOT QT4_FOUND)
+        include(${QT_USE_FILE})
+    endif(BUILD_ENABLE_QT5)
 
-    include(${QT_USE_FILE})
 
-    IF(NOT QT4_FOUND)
-        MESSAGE(FATAL_ERROR "=======================\n"
-                            "Qt libraries not found.\n"
-                            "=======================\n")
-    ENDIF(NOT QT4_FOUND)
 
     IF(NOT QT_QTWEBKIT_FOUND)
         MESSAGE("=====================================================\n"
