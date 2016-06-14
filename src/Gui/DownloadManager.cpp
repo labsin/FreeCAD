@@ -33,7 +33,9 @@
 #include <QMetaEnum>
 #include <QSettings>
 #include <QFileIconProvider>
+#ifdef QTWEBKIT
 #include <QWebSettings>
+#endif //QTWEBKIT
 #if QT_VERSION >= 0x050000
 #include <QUrlQuery>
 #endif
@@ -246,10 +248,13 @@ void DownloadManager::updateRow()
     ui->downloadsView->setRowHeight(row, item->minimumSizeHint().height());
 
     bool remove = false;
+#ifdef QTWEBKIT
     QWebSettings *globalSettings = QWebSettings::globalSettings();
     if (!item->downloading()
         && globalSettings->testAttribute(QWebSettings::PrivateBrowsingEnabled))
         remove = true;
+#endif //QTWEBKIT
+
 
     if (item->downloadedSuccessfully()
         && removePolicy() == DownloadManager::SuccessFullDownload) {
