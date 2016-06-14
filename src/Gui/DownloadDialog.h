@@ -30,14 +30,15 @@
 #include <QBuffer>
 #include <QLabel>
 #include <QProgressBar>
-#include <QHttp>
 #include <QFileInfo>
 #include <QCloseEvent>
 #include <QDialogButtonBox>
 
 class QFile;
-class QHttpResponseHeader;
 class QAuthenticator;
+class QNetworkAccessManager;
+class QNetworkReply;
+class QSslError;
 
 namespace Gui {
 namespace Dialog {
@@ -57,10 +58,12 @@ public:
 private Q_SLOTS:
     void downloadFile();
     void cancelDownload();
-    void httpRequestFinished(int requestId, bool error);
-    void readResponseHeader(const QHttpResponseHeader &responseHeader);
-    void updateDataReadProgress(int bytesRead, int totalBytes);
-    void slotAuthenticationRequired(const QString &, quint16, QAuthenticator *);
+    void onError();
+    void onSslErrors(QList<QSslError>);
+    void onReadyRead();
+    void onFinished();
+    void onAuthenticationRequired(QNetworkReply *, QAuthenticator *);
+    void onDownloadProgress(qint64, qint64);
 
 private:
     QLabel *statusLabel;
@@ -71,10 +74,11 @@ private:
     QDialogButtonBox *buttonBox;
 
     QUrl url;
-    QHttp *http;
     QFile *file;
-    int httpGetId;
-    bool httpRequestAborted;
+    bool qNetworkReplyAborted;
+
+    QNetworkAccessManager * _qnam;
+    QNetworkReply * _qnr;
 };
 
 } // namespace Dialog

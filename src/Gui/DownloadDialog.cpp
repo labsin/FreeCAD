@@ -25,18 +25,27 @@
 #ifndef _PreComp_
 # include <QPushButton>
 # include <QHBoxLayout>
+# include <QNetworkAccessManager>
+# include <QNetworkReply>
+# include <QNetworkRequest>
+# include <QUrl>
+# include <QSslError>
 #endif
 
 #include <QAuthenticator>
 #include "DownloadDialog.h"
 #include "ui_DlgAuthorization.h"
+#include <Base/Console.h>
 
 using namespace Gui::Dialog;
 
 
 DownloadDialog::DownloadDialog(const QUrl& url, QWidget *parent)
-  : QDialog(parent), url(url)
+  : QDialog(parent), url(url), file(NULL), _qnr(NULL)
 {
+    _qnam = new QNetworkAccessManager(this);
+    connect(_qnam, SIGNAL(authenticationRequired(QNetworkReply *, QAuthenticator *)), this, SLOT(onAuthenticationRequired(QNetworkReply *, QAuthenticator *)));
+
     statusLabel = new QLabel(url.toString());
     progressBar = new QProgressBar(this);
     downloadButton = new QPushButton(tr("Download"));
@@ -45,23 +54,12 @@ DownloadDialog::DownloadDialog(const QUrl& url, QWidget *parent)
     closeButton = new QPushButton(tr("Close"));
     closeButton->setAutoDefault(false);
 
-
     buttonBox = new QDialogButtonBox;
     buttonBox->addButton(downloadButton, QDialogButtonBox::ActionRole);
     buttonBox->addButton(closeButton, QDialogButtonBox::RejectRole);
     buttonBox->addButton(cancelButton, QDialogButtonBox::RejectRole);
     cancelButton->hide();
 
-    http = new QHttp(this);
-
-    connect(http, SIGNAL(requestFinished(int, bool)),
-            this, SLOT(httpRequestFinished(int, bool)));
-    connect(http, SIGNAL(dataReadProgress(int, int)),
-            this, SLOT(updateDataReadProgress(int, int)));
-    connect(http, SIGNAL(responseHeaderReceived(const QHttpResponseHeader &)),
-            this, SLOT(readResponseHeader(const QHttpResponseHeader &)));
-    connect(http, SIGNAL(authenticationRequired(const QString &, quint16, QAuthenticator *)),
-            this, SLOT(slotAuthenticationRequired(const QString &, quint16, QAuthenticator *)));
     connect(downloadButton, SIGNAL(clicked()), this, SLOT(downloadFile()));
     connect(cancelButton, SIGNAL(clicked()), this, SLOT(cancelDownload()));
     connect(closeButton, SIGNAL(clicked()), this, SLOT(close()));
@@ -95,28 +93,39 @@ void DownloadDialog::downloadFile()
         QFile::remove(fileName);
     }
 
+    if (file) {
+        file->close();
+        file->remove();
+        file->deleteLater();
+        file = NULL;
+    }
     file = new QFile(fileName);
     if (!file->open(QIODevice::WriteOnly)) {
         QMessageBox::information(this, tr("Download"),
                                  tr("Unable to save the file %1: %2.")
                                  .arg(fileName).arg(file->errorString()));
-        delete file;
-        file = 0;
+        file->deleteLater();
+        file = NULL;
         return;
     }
 
-    QHttp::ConnectionMode mode = url.scheme().toLower() == QLatin1String("https")
-        ? QHttp::ConnectionModeHttps : QHttp::ConnectionModeHttp;
-    http->setHost(url.host(), mode, url.port() == -1 ? 80 : url.port());
-    
-    if (!url.userName().isEmpty())
-        http->setUser(url.userName(), url.password());
+    QNetworkRequest request;
+    request.setUrl(url);
 
-    httpRequestAborted = false;
-    QByteArray path = QUrl::toPercentEncoding(url.path(), "!$&'()*+,;=:@/");
-    if (path.isEmpty())
-        path = "/";
-    httpGetId = http->get(QString::fromLatin1(path), file);
+    qNetworkReplyAborted = false;
+
+    if(_qnr) {
+        disconnect(_qnr);
+        _qnr->deleteLater();
+    }
+    _qnr = _qnam->get(request);
+    connect(_qnr, SIGNAL(finished()), this, SLOT(onFinished()));
+    connect(_qnr, SIGNAL(error(QNetworkReply::NetworkError)),
+            this, SLOT(onError()));
+    connect(_qnr, SIGNAL(sslErrors(QList<QSslError>)),
+            this, SLOT(onSslErrors(QList<QSslError>)));
+    connect(_qnr, SIGNAL(downloadProgress(qint64 , qint64 )), this, SLOT(onDownloadProgress(qint64 , qint64 )));
+    connect(_qnr, SIGNAL(readyRead()), this, SLOT(onReadyRead()));
 
     statusLabel->setText(tr("Downloading %1.").arg(fileName));
     downloadButton->setEnabled(false);
@@ -127,38 +136,54 @@ void DownloadDialog::downloadFile()
 void DownloadDialog::cancelDownload()
 {
     statusLabel->setText(tr("Download canceled."));
-    httpRequestAborted = true;
-    http->abort();
+    qNetworkReplyAborted = true;
+    _qnr->abort();
     close();
 }
 
-void DownloadDialog::httpRequestFinished(int requestId, bool error)
-{
-    if (requestId != httpGetId)
+void DownloadDialog::onError() {
+    if(!_qnr)
         return;
-    if (httpRequestAborted) {
+
+    Base::Console().Log("NetworkError %d: %s\n", _qnr->error(), (const char*)_qnr->errorString().toLatin1());
+}
+
+void DownloadDialog::onSslErrors(QList<QSslError> qsslErrs) {
+    if(!_qnr)
+        return;
+
+    for(int i = 0; i < qsslErrs.size(); ++i) {
+        QSslError qsslErr = qsslErrs.at(i);
+        Base::Console().Log("SslError %d: %s\n", qsslErr.error(), (const char*)qsslErr.errorString().toLatin1());
+    }
+}
+
+void DownloadDialog::onFinished()
+{
+    if (qNetworkReplyAborted) {
         if (file) {
             file->close();
             file->remove();
-            delete file;
-            file = 0;
+            file->deleteLater();
+            file = NULL;
         }
 
         progressBar->hide();
         return;
     }
 
-    if (requestId != httpGetId)
-        return;
+    // There might be data left
+    QDataStream writeStream(file);
+    writeStream << _qnr->readAll();
 
     progressBar->hide();
     file->close();
 
-    if (error) {
+    if (_qnr->error() != QNetworkReply::NoError) {
         file->remove();
         QMessageBox::information(this, tr("Download"),
                                  tr("Download failed: %1.")
-                                 .arg(http->errorString()));
+                                 .arg(_qnr->errorString()));
     }
     else {
         QString fileName = QFileInfo(url.path()).fileName();
@@ -168,47 +193,20 @@ void DownloadDialog::httpRequestFinished(int requestId, bool error)
     downloadButton->setEnabled(true);
     cancelButton->hide();
     closeButton->show();
-    delete file;
-    file = 0;
+    file->deleteLater();
+    file = NULL;
+    disconnect(_qnr);
+    _qnr->deleteLater();
+    _qnr = NULL;
 }
 
-void DownloadDialog::readResponseHeader(const QHttpResponseHeader &responseHeader)
-{
-    switch (responseHeader.statusCode()) {
-    case 200:                   // Ok
-    case 301:                   // Moved Permanently
-    case 302:                   // Found
-    case 303:                   // See Other
-    case 307:                   // Temporary Redirect
-        // these are not error conditions
-        break;
-
-    default:
-        QMessageBox::information(this, tr("Download"),
-                                 tr("Download failed: %1.")
-                                 .arg(responseHeader.reasonPhrase()));
-        httpRequestAborted = true;
-        progressBar->hide();
-        http->abort();
-    }
-}
-
-void DownloadDialog::updateDataReadProgress(int bytesRead, int totalBytes)
-{
-    if (httpRequestAborted)
-        return;
-
-    progressBar->setMaximum(totalBytes);
-    progressBar->setValue(bytesRead);
-}
-
-void DownloadDialog::slotAuthenticationRequired(const QString &hostName, quint16, QAuthenticator *authenticator)
+void DownloadDialog::onAuthenticationRequired(QNetworkReply *reply, QAuthenticator *authenticator)
 {
     QDialog dlg;
     Ui_DlgAuthorization ui;
     ui.setupUi(&dlg);
     dlg.adjustSize();
-    ui.siteDescription->setText(tr("%1 at %2").arg(authenticator->realm()).arg(hostName));
+    ui.siteDescription->setText(tr("%1 at %2").arg(authenticator->realm()).arg(reply->url().host()));
 
     if (dlg.exec() == QDialog::Accepted) {
         authenticator->setUser(ui.username->text());
@@ -216,5 +214,22 @@ void DownloadDialog::slotAuthenticationRequired(const QString &hostName, quint16
     }
 }
 
+void DownloadDialog::onDownloadProgress(qint64 bytesRead, qint64 totalBytes)
+{
+    if (qNetworkReplyAborted)
+        return;
+
+    progressBar->setMaximum(totalBytes);
+    progressBar->setValue(bytesRead);
+}
+
+void DownloadDialog::onReadyRead()
+{
+    if (qNetworkReplyAborted)
+        return;
+
+    QDataStream writeStream(file);
+    writeStream << _qnr->readAll();
+}
 
 #include "moc_DownloadDialog.cpp"

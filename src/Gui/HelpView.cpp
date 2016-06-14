@@ -28,7 +28,6 @@
 # include <QDropEvent>
 # include <QGroupBox>
 # include <QHBoxLayout>
-# include <QHttp>
 # include <QLabel>
 # include <QMenu>
 # include <QMessageBox>
@@ -38,6 +37,11 @@
 # include <QToolButton>
 # include <QToolTip>
 # include <QWhatsThis>
+# include <QNetworkAccessManager>
+# include <QNetworkReply>
+# include <QNetworkRequest>
+# include <QUrl>
+# include <QSslError>
 #endif
 
 #include "HelpView.h"
@@ -67,18 +71,22 @@ public:
   bool bw, fw;
   int toolTipId;
   QString toolTip;
-  QHttp* http;
+  QNetworkAccessManager * networkManager;
+  QNetworkReply * networkReply;
   QUrl source;
   QList<TextBrowserResources> resources;
 
-  TextBrowserPrivate() : bw(false), fw(false), toolTipId(0)
+  TextBrowserPrivate() : bw(false), fw(false), toolTipId(0), networkReply(NULL)
   {
-    http = new QHttp;
+    networkManager = new QNetworkAccessManager;
   }
   
   ~TextBrowserPrivate()
   {
-    delete http;
+    delete networkManager;
+    if(networkReply) {
+        delete networkReply;
+    }
   }
 };
 
@@ -98,9 +106,6 @@ TextBrowser::TextBrowser(QWidget * parent)
   setAcceptDrops( true );
   viewport()->setAcceptDrops( true );
 
-  connect( d->http, SIGNAL(done(bool)), this, SLOT(done(bool)));
-  connect( d->http, SIGNAL(stateChanged(int)), this, SLOT(onStateChanged(int)));
-  connect( d->http, SIGNAL(responseHeaderReceived(const QHttpResponseHeader &)), this, SLOT(onResponseHeaderReceived(const QHttpResponseHeader &)));
   connect( this, SIGNAL(highlighted(const QString&)), this, SLOT(onHighlighted(const QString&)));
   connect( this, SIGNAL(backwardAvailable(bool)), this, SLOT(setBackwardAvailable(bool)));
   connect( this, SIGNAL(forwardAvailable (bool)), this, SLOT(setForwardAvailable (bool)));
@@ -166,13 +171,36 @@ void TextBrowser::setSource (const QUrl& url)
   if (url.scheme() == QLatin1String("http")) {
     // start the download but do not call setSource() of the base
     // class because we must wait until the data are available.
-    // The slot done() is invoked automatically then. 
-    d->http->setHost(url.host());
-    d->http->get(url.path(), 0);
+    // The slot onFinished() is invoked automatically then.
+    QNetworkRequest request;
+    request.setUrl(url);
+    if(d->networkReply) {
+        disconnect(d->networkReply);
+        d->networkReply->deleteLater();
+    }
+    d->networkReply = d->networkManager->get(request);
+    connect(d->networkReply, SIGNAL(finished()), this, SLOT(onFinished()));
+    connect(d->networkReply, SIGNAL(error(QNetworkReply::NetworkError)),
+            this, SLOT(onError()));
+    connect(d->networkReply, SIGNAL(sslErrors(QList<QSslError>)),
+            this, SLOT(onSslErrors(QList<QSslError>)));
   } else if (d->source.scheme() == QLatin1String("http")) {
     // relative hyperlink in previously downloaded a HTML page 
     d->source = d->source.resolved(url);
-    d->http->get(url.path(), 0);
+
+    QNetworkRequest request;
+    request.setUrl(d->source);
+
+    if(d->networkReply) {
+        disconnect(d->networkReply);
+        d->networkReply->deleteLater();
+    }
+    d->networkReply = d->networkManager->get(request);
+    connect(d->networkReply, SIGNAL(finished()), this, SLOT(onFinished()));
+    connect(d->networkReply, SIGNAL(error(QNetworkReply::NetworkError)),
+            this, SLOT(onError()));
+    connect(d->networkReply, SIGNAL(sslErrors(QList<QSslError>)),
+            this, SLOT(onSslErrors(QList<QSslError>)));
   } else {
     QUrl resolved = url;
 #if defined (Q_OS_WIN)
@@ -302,8 +330,8 @@ QVariant TextBrowser::loadHttpResource(int type, const QUrl& name)
     return data;
   }
 
-  if (d->http->error() == QHttp::NoError) {
-    return d->http->readAll();
+  if (d->networkReply && d->networkReply->error() == QNetworkReply::NoError) {
+    return d->networkReply->readAll();
   } else {
     if (type == QTextDocument::HtmlResource) {
         data = QString::fromLatin1(
@@ -317,7 +345,7 @@ QVariant TextBrowser::loadHttpResource(int type, const QUrl& name)
         "<h1>%1</h1>"
         "<div><p><strong>%2</strong></p>"
         "</div></body>"
-        "</html>").arg(d->http->errorString()).arg(tr("You tried to access the address %1 which is currently unavailable. "
+        "</html>").arg(d->networkReply->errorString()).arg(tr("You tried to access the address %1 which is currently unavailable. "
         "Please make sure that the URL exists and try reloading the page.").arg(name.toString()));
     }
   }
@@ -328,16 +356,16 @@ QVariant TextBrowser::loadHttpResource(int type, const QUrl& name)
 /**
  * The download has finished. We add the resource to the document now.
  */
-void TextBrowser::done( bool /*err*/ )
+void TextBrowser::onFinished()
 {
-  if (d->resources.isEmpty()/* && d->requestId == d->http->currentId()*/) {
+  if (d->resources.isEmpty()) {
     // set the HTML text
     QTextBrowser::setSource(d->source);
   } else {
     // add the referenced resource to the document
     TextBrowserResources res = d->resources.front();
 
-    QVariant data(d->http->readAll());
+    QVariant data(d->networkReply->readAll());
     document()->addResource(res.type, res.url, data);
     viewport()->repaint();
     d->resources.pop_front();
@@ -346,48 +374,37 @@ void TextBrowser::done( bool /*err*/ )
   // if we need to download further resources start a http request
   if (!d->resources.isEmpty()) {
     TextBrowserResources res = d->resources.front();
-    d->http->get(res.url.toString());
+
+    QNetworkRequest request;
+    request.setUrl(res.url);
+
+    disconnect(d->networkReply);
+    d->networkReply->deleteLater();
+
+    d->networkReply = d->networkManager->get(request);
+    connect(d->networkReply, SIGNAL(finished()), this, SLOT(onFinished()));
+    connect(d->networkReply, SIGNAL(error(QNetworkReply::NetworkError)),
+            this, SLOT(onError()));
+    connect(d->networkReply, SIGNAL(sslErrors(QList<QSslError>)),
+            this, SLOT(onSslErrors(QList<QSslError>)));
   } else {
     stateChanged(d->source.toString());
+
+    disconnect(d->networkReply);
+    d->networkReply->deleteLater();
+    d->networkReply = NULL;
   }
 }
 
-/**
- * Prints some status information.
- */
-void TextBrowser::onStateChanged ( int state )
-{
-  switch (state) {
-    case QHttp::Connecting:
-      stateChanged(tr("Connecting to %1").arg(d->source.host()));
-      break;
-    case QHttp::Sending:
-      stateChanged(tr("Sending to %1").arg(d->source.host()));
-      break;
-    case QHttp::Reading:
-      stateChanged(tr("Reading from %1").arg(d->source.host()));
-      break;
-    case QHttp::Closing:
-    case QHttp::Unconnected:
-      if (d->http->error() == QHttp::NoError)
-        stateChanged(d->source.toString());
-      else
-        stateChanged(d->http->errorString());
-      break;
-    default:
-      break;
-  }
+void TextBrowser::onError() {
+    stateChanged(d->networkReply->errorString());
 }
 
-/**
- * Checks for the status code and aborts the request if needed.
- */
-void TextBrowser::onResponseHeaderReceived(const QHttpResponseHeader &responseHeader)
-{
-  if (responseHeader.statusCode() != 200) {
-    stateChanged(tr("Download failed: %1.").arg(responseHeader.reasonPhrase()));
-    d->http->abort();
-  }
+void TextBrowser::onSslErrors(QList<QSslError> qsslErrs) {
+    for(int i = 0; i < qsslErrs.size(); ++i) {
+        QSslError qsslErr = qsslErrs.at(i);
+        stateChanged(qsslErr.errorString());
+    }
 }
 
 void TextBrowser::onHighlighted(const QString& url)

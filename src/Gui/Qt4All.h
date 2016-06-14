@@ -157,9 +157,10 @@
 #include <QWorkspace> // obsolete
 // QtNetwork
 #include <QFtp>
-#include <QHttp>
-#include <QHttpResponseHeader>
-#include <QHttpRequestHeader>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QSslError>
 #include <QTcpServer>
 #include <QTcpSocket>
 // QtOpenGL

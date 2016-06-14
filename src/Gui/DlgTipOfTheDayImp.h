@@ -27,8 +27,9 @@
 #include "ui_DlgTipOfTheDay.h"
 #include "Window.h"
 
-class QHttpResponseHeader;
-class QHttp;
+class QNetworkAccessManager;
+class QNetworkReply;
+class QSslError;
 
 namespace Gui {
 namespace Dialog {
@@ -64,14 +65,15 @@ public Q_SLOTS:
     void on_buttonNextTip_clicked();
 
 protected Q_SLOTS:
-    void onDone(bool);
-    void onStateChanged (int state);
-    void onResponseHeaderReceived(const QHttpResponseHeader &);
+    void onError();
+    void onSslErrors(QList<QSslError>);
+    void onFinished();
 
 private:
     QStringList _lTips;
     int _iCurrentTip;
-    QHttp* _http;
+    QNetworkAccessManager * _qnam;
+    QNetworkReply * _qnr;
 };
 
 } // namespace Dialog

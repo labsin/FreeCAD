@@ -29,7 +29,11 @@
 # include <qlabel.h>
 # include <qlayout.h>
 # include <qtextstream.h>
-# include <QHttp>
+# include <QNetworkAccessManager>
+# include <QNetworkReply>
+# include <QNetworkRequest>
+# include <QUrl>
+# include <QSslError>
 #endif
 
 #include "DlgTipOfTheDayImp.h"
@@ -52,14 +56,10 @@ using namespace Gui::Dialog;
  */
 DlgTipOfTheDayImp::DlgTipOfTheDayImp( QWidget* parent, Qt::WindowFlags fl )
   : QDialog( parent, fl | Qt::WindowTitleHint | Qt::WindowSystemMenuHint ),
-  WindowParameter("General")
+  WindowParameter("General"), _qnr(NULL)
 {
     setupUi(this);
-    _http = new QHttp;
-    connect(_http, SIGNAL(done(bool)), this, SLOT(onDone(bool)));
-    connect(_http, SIGNAL(stateChanged(int)), this, SLOT(onStateChanged(int)));
-    connect(_http, SIGNAL(responseHeaderReceived(const QHttpResponseHeader &)), 
-            this, SLOT(onResponseHeaderReceived(const QHttpResponseHeader &)));
+    _qnam = new QNetworkAccessManager(this);
 
     bool tips = getWindowParameter()->GetBool("Tipoftheday", true);
     checkShowTips->setChecked(tips);
@@ -76,7 +76,10 @@ DlgTipOfTheDayImp::DlgTipOfTheDayImp( QWidget* parent, Qt::WindowFlags fl )
 /** Destroys the object and frees any allocated resources */
 DlgTipOfTheDayImp::~DlgTipOfTheDayImp()
 {
-    delete _http;
+    delete _qnam;
+    if(_qnr) {
+        delete _qnr;
+    }
     getWindowParameter()->SetBool("Tipoftheday", checkShowTips->isChecked());
 }
 
@@ -91,8 +94,19 @@ void DlgTipOfTheDayImp::on_buttonNextTip_clicked()
 void DlgTipOfTheDayImp::reload()
 {
     // set the host and start the download
-    _http->setHost(QLatin1String("www.freecadweb.org"));
-    _http->get(QLatin1String("/wiki/index.php?title=Tip_of_the_day"), 0);
+    QNetworkRequest request;
+    request.setUrl(QUrl(QString::fromLatin1("http://www.freecadweb.org/wiki/index.php?title=Tip_of_the_day")));
+
+    if(_qnr) {
+        disconnect(_qnr);
+        _qnr->deleteLater();
+    }
+    _qnr = _qnam->get(request);
+    connect(_qnr, SIGNAL(finished()), this, SLOT(onFinished()));
+    connect(_qnr, SIGNAL(error(QNetworkReply::NetworkError)),
+            this, SLOT(onError()));
+    connect(_qnr, SIGNAL(sslErrors(QList<QSslError>)),
+            this, SLOT(onSslErrors(QList<QSslError>)));
 
     _iCurrentTip = 0;
     _lTips << tr("If you want to learn more about FreeCAD you must go to %1 or press the Help item in the Help menu.")
@@ -100,54 +114,42 @@ void DlgTipOfTheDayImp::reload()
                            "http://www.freecadweb.org/wiki/</a>"));
 }
 
-void DlgTipOfTheDayImp::onResponseHeaderReceived(const QHttpResponseHeader & responseHeader)
+/**
+ * The network reply is no longer needed but can't be deleted imediately
+ * so we use deleteLater()
+ */
+void DlgTipOfTheDayImp::onFinished()
 {
-    if (responseHeader.statusCode() != 200) {
-        QString msg = tr("Download failed: %1\n").arg(responseHeader.reasonPhrase());
-        Base::Console().Log(msg.toLatin1());
-        _http->abort();
+    if(_qnr) {
+        // get the page and search for the tips section
+        // readAll() returns 0 if there are error or the request
+        // was aborted. This shouldn't be a problem.
+        QString text = QString::fromLatin1(_qnr->readAll());
+        QRegExp rx(QLatin1String("<p>You find the latest information.+<div class=\"printfooter\">"));
+        if (rx.indexIn(text) > -1) {
+            // the text of interest
+            text = rx.cap();
+            rx.setPattern(QLatin1String("<ul><li>.+</li></ul>\n"));
+            rx.setMinimal(true);
+            _lTips += text.split(rx, QString::SkipEmptyParts);
+        }
+        disconnect(_qnr);
+        _qnr->deleteLater();
+        _qnr = NULL;
     }
 }
-
-void DlgTipOfTheDayImp::onDone(bool err)
-{
-    if (err)
+void DlgTipOfTheDayImp::onError() {
+    if(!_qnr)
         return;
 
-    // get the page and search for the tips section
-    QString text = QString::fromLatin1(_http->readAll());
-    QRegExp rx(QLatin1String("<p>You find the latest information.+<div class=\"printfooter\">"));
-    if (rx.indexIn(text) > -1) {
-        // the text of interest
-        text = rx.cap();
-        rx.setPattern(QLatin1String("<ul><li>.+</li></ul>\n"));
-        rx.setMinimal(true);
-        _lTips += text.split(rx, QString::SkipEmptyParts);
-    }
+    Base::Console().Log("NetworkError %d: %s\n", _qnr->error(), (const char*)_qnr->errorString().toLatin1());
 }
 
-/**
- * Prints some status information.
- */
-void DlgTipOfTheDayImp::onStateChanged (int state)
-{
-    switch (state) {
-        case QHttp::Connecting:
-            Base::Console().Log("Connecting to host...\n");
-            break;
-        case QHttp::Sending:
-            Base::Console().Log("Sending to host...\n");
-            break;
-        case QHttp::Reading:
-            Base::Console().Log("Reading from host...\n");
-            break;
-        case QHttp::Closing:
-        case QHttp::Unconnected:
-            Base::Console().Log("%s\n",(const char*)_http->errorString().toLatin1());
-            break;
-        default:
-            break;
-  }
+void DlgTipOfTheDayImp::onSslErrors(QList<QSslError> qsslErrs) {
+    for(int i = 0; i < qsslErrs.size(); ++i) {
+        QSslError qsslErr = qsslErrs.at(i);
+        Base::Console().Log("SslError %d: %s\n", qsslErr.error(), (const char*)qsslErr.errorString().toLatin1());
+    }
 }
 
 #include "moc_DlgTipOfTheDayImp.cpp"

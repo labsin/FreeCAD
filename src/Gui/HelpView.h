@@ -30,7 +30,9 @@
 
 class QUrl;
 class QLabel;
-class QHttpResponseHeader;
+class QNetworkAccessManager;
+class QNetworkReply;
+class QSslError;
 
 namespace Gui {
 namespace DockWnd {
@@ -70,10 +72,11 @@ protected:
 private Q_SLOTS:
   void setBackwardAvailable( bool b);
   void setForwardAvailable( bool b);
-  void done( bool );
-  void onStateChanged ( int state );
-  void onResponseHeaderReceived(const QHttpResponseHeader &);
   void onHighlighted(const QString&);
+
+  void onFinished();
+  void onError();
+  void onSslErrors(QList<QSslError>);
 
 private:
   QString findUrl(const QUrl &name) const;
